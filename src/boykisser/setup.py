@@ -21,6 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
                 'roamer = boykisser.roamer:main',
+                'opencv = boykisser.opencv_bridge:main',
+                'countour = boykisser.colour_contours:main',
                 'square = boykisser.square:main'
         ],
     },

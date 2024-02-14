@@ -12,9 +12,9 @@ class Roamer(Node):
     """
 
     min_distance = 0.5  # stay at least 30cm away from obstacles
-    turn_speed = 0.4    # rad/s, turning speed in case of obstacle
+    turn_speed = 2.0    # rad/s, turning speed in case of obstacle
     forward_speed = 0.4 # m/s, speed with which to go forward if the space is clear
-    scan_segment = 45   # degrees, the size of the left and right laser segment to search for obstacles
+    scan_segment = 200   # degrees, the size of the left and right laser segment to search for obstacles
 
     turn_dir = 0
 
@@ -39,7 +39,7 @@ class Roamer(Node):
         # initialise as positive infinity
         min_range = math.inf
         for v in range:
-            if v < min_range:
+            if v != 0 and v < min_range:
                 min_range = v
         return min_range
 
@@ -52,15 +52,16 @@ class Roamer(Node):
         """
 
         # first, identify the nearest obstacle in the right 45 degree segment of the laser scanner
-        min_range_right = self.min_range(data.ranges[:self.scan_segment])
+        min_range_right = self.min_range(data.ranges[self.scan_segment-10:self.scan_segment])
         min_range_left = self.min_range(data.ranges[-self.scan_segment:])
-      
+  
+
         if min_range_right < self.min_distance:
-            self.get_logger().info('turning left')
+            self.get_logger().info(f'turning left :3 {min_range_right}')
             self.turn_dir = 1
            
         elif min_range_left < self.min_distance:
-            self.get_logger().info('turning right')
+            self.get_logger().info(f'turning right {min_range_left}')
             self.turn_dir = -1
         
         else:
