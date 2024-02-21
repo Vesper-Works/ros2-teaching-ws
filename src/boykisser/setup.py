@@ -23,7 +23,8 @@ setup(
                 'roamer = boykisser.roamer:main',
                 'opencv = boykisser.opencv_bridge:main',
                 'countour = boykisser.colour_contours:main',
-                'square = boykisser.square:main'
+                'square = boykisser.square:main',
+                'controlstrat = boykisser.ControlStrategy:main'
         ],
     },
 )
