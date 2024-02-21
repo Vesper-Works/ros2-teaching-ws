@@ -10,13 +10,25 @@ from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge, CvBridgeError # Package to convert between ROS and OpenCV Images
 import cv2
 import numpy as np
+from std_msgs.msg import String
+
 
 class ColourContours(Node):
+
+    def play_audio(self, file_path):
+        # Publish the file path to the audio_play topic
+        audio_pub = self.create_publisher(String, '/audio_play', 10)
+        msg = String()
+        msg.data = file_path
+        audio_pub.publish(msg)
+
     def __init__(self):
         super().__init__('colour_contours')
         self.create_subscription(CompressedImage, '/camera/color/image_raw/compressed', self.camera_callback, 1)
 
         self.br = CvBridge()
+
+        play_audio(self, "bone.mp3")
 
     def camera_callback(self, data):
         #self.get_logger().info("camera_callback")

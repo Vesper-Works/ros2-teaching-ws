@@ -130,7 +130,7 @@ def main(args=None):
     control_strategy = ControlStrategy(delta_t=0.01)
     # TODO Utilize the control_strategy.diff_drive_init function to set the angular velocities
     # of the left and right side wheels of the robot
-    control_strategy.diff_drive_init(8,4)
+    control_strategy.diff_drive_init(0,2)
     while rclpy.ok():
         try:
             rclpy.spin_once(control_strategy)
