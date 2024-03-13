@@ -107,7 +107,7 @@ class ControlStrategy(Node):
                 self.end_controller = True
                 return 
 
-            # TODO Estimate the distance (self.D) between current pose (self.robot_current_pose) #
+            # TODO Estimate the distance (self.D) bros2-teaching-ws/src/navigation2/nav2_bringup/params ros2-teaching-ws/src/navigation2/nav2_bringup/maps ros2-teaching-ws/src/navigation2/nav2_bringup/rvizetween current pose (self.robot_current_pose) #
             # and reference pose (self.refPose) 
             # self.D =
 
@@ -228,7 +228,7 @@ def main(args=None):
     # control_strategy.inter_direction_diff_drive_init(r_distance=0.6
     #                 , refPose=np.array([1.0,1.0,0]), k_p=0.1, k_w=0.5, dmin=0.7)
     control_strategy.inter_point_diff_drive_init(r_distance=0.5
-                    , refPose=np.array([5,5,0]), k_p=0.075, k_w=0.5, dmin=0.7, duration=50)
+                    , refPose=np.array([-5,5,0]), k_p=0.035, k_w=0.5, dmin=0.7, duration=50)
         
     while rclpy.ok():
         try:
