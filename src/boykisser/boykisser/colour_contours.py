@@ -15,20 +15,11 @@ from std_msgs.msg import String
 
 class ColourContours(Node):
 
-    def play_audio(self, file_path):
-        # Publish the file path to the audio_play topic
-        audio_pub = self.create_publisher(String, '/audio_play', 10)
-        msg = String()
-        msg.data = file_path
-        audio_pub.publish(msg)
-
     def __init__(self):
         super().__init__('colour_contours')
         self.create_subscription(CompressedImage, '/camera/color/image_raw/compressed', self.camera_callback, 1)
 
         self.br = CvBridge()
-
-        play_audio(self, "bone.mp3")
 
     def camera_callback(self, data):
         #self.get_logger().info("camera_callback")
@@ -42,7 +33,6 @@ class ColourContours(Node):
         cv2.imshow("Image window", cv_image)
         cv2.waitKey(1)
 
-        return
         # using the BGR colour space, create a mask for everything
         # that is in a certain range
         bgr_thresh = cv2.inRange(cv_image,
