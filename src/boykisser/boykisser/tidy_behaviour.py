@@ -7,6 +7,8 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 import math
 from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import PointCloud2
 from cv_bridge import CvBridge # Package to convert between ROS and OpenCV Images
 import cv2
 import numpy as np
@@ -16,20 +18,19 @@ import random
 
 class State(Enum):
     TurningAround  = 1
-    FindingClosestCube = 2
-    CheckIfAgainstWall = 3
-    CloseInOnCube = 4
-    ReAlignToCube = 5
-    PushingToWall = 6
-    BackingUp = 7
-    Testing = 8
+    AlignToCube = 2
+    CloseInOnCube = 3
+    ReAlignToCube = 4
+    PushingToWall = 5
+    BackingUp = 6
+    Testing = 7
 
 class TidyBehaviour(Node):
 
     min_distance = 0.5  # stay at least 30cm away from obstacles
     fast_turn_speed = 0.9    # rad/s, turning speed in case of obstacle
     align_turn_speed = 0.3    # rad/s, turning speed in case of obstacle
-    forward_speed = 0.4 # m/s, speed with which to go forward if the space is clear
+    forward_speed = 0.3 # m/s, speed with which to go forward if the space is clear
     scan_segment = 1   # degrees, the size of the left and right laser segment to search for obstacles
     state = State.TurningAround
     turn_dir = 0
@@ -37,7 +38,8 @@ class TidyBehaviour(Node):
     cCentreX = 400
     cCentreY = 400
     robot_current_pose_real = np.array([0, 0, 0])
-
+    rays = None
+    depth_image = []
     def __init__(self):
         
         super().__init__('tidybehaviour')
@@ -47,10 +49,13 @@ class TidyBehaviour(Node):
         self.twist_pub = self.create_publisher(
             Twist,
             '/cmd_vel', 1)
+        self.laser_pub = self.create_publisher(
+            LaserScan, "/scan", 1)
         
         self.timer = self.create_timer(0.02, self.timer_callback)
 
         # subscribe to the camera topic
+        self.create_subscription(Image, '/limo/depth_camera_link/depth/image_raw', self.depth_camera_callback, 10)
         self.create_subscription(Image, '/limo/depth_camera_link/image_raw', self.camera_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, "/odom", self.set_pose, 20)
         # Used to convert between ROS and OpenCV images
@@ -64,23 +69,35 @@ class TidyBehaviour(Node):
         y = int(M['m01']/(M['m00']))#avoid divide by 0
         
         dist = abs(self.cCentreX - x)
-        return area/10 - dist#dist used to settle ties, favour centred boxes
-#Modified from https://github.com/LCAS/teaching/blob/2324-devel/cmp3103m_ros2_code_fragments/cmp3103m_ros2_code_fragments/colour_chaser2.py
-    def camera_callback(self, data):
-    
-        #self.get_logger().info("camera_callback")
 
-        if (self.state != State.FindingClosestCube and 
+        boxDepth = -self.depth_image[y][x]
+
+        return boxDepth - (dist/(self.cCentreX/2)) #dist used to settle ties, favour centred boxes
+#Modified from https://github.com/LCAS/teaching/blob/2324-devel/cmp3103m_ros2_code_fragments/cmp3103m_ros2_code_fragments/colour_chaser2.py
+    def depth_camera_callback(self, data):
+        cv2.namedWindow("Depth", 1)
+
+        # Convert ROS Image message to OpenCV image
+        current_frame = self.br.imgmsg_to_cv2(data, "32FC1")
+        self.depth_image = current_frame
+        depth_image_small = cv2.resize(current_frame, (0,0), fx=0.9, fy=0.9)
+        cv2.imshow("Depth", depth_image_small)
+        cv2.waitKey(1)
+        return
+    def camera_callback(self, data):
+
+        if (self.state != State.TurningAround and 
+            self.state != State.AlignToCube and 
             self.state != State.ReAlignToCube and 
             self.state != State.CloseInOnCube and
             self.state != State.Testing):
             return;
-
-        cv2.namedWindow("Image window", 1)
+        if(self.rays == None or len(self.depth_image) == 0):
+            return;
+        cv2.namedWindow("Colour", 1)
 
         # Convert ROS Image message to OpenCV image
         current_frame = self.br.imgmsg_to_cv2(data, desired_encoding='bgr8')
-
         # Convert image to HSV
         current_frame_hsv = cv2.cvtColor(current_frame, cv2.COLOR_BGR2HSV)
         # Create mask for range of colours (HSV low values, HSV high values)
@@ -110,9 +127,41 @@ class TidyBehaviour(Node):
 
                     if cy <= self.cCentreY:
                         continue
-                         
+                        
+                    projectionMat = np.matrix([[448.6252424876914, 0, 320.5], [0, 448.6252424876914, 240.5],[0, 0, 1]])
+                    
+                    inverseProjectionMat = np.linalg.inv(projectionMat)
+                    pixelPos = np.array([[cx], [1], [1]])
+                    pixelWorldDir = inverseProjectionMat * pixelPos
+                    angle = np.arccos(np.dot(np.transpose(pixelWorldDir), [1,0,0])) #you have to check if [0,0,1] is really the center axis, i am assuming it is, to double check do inverseProjectionMat * numpy.transpose([0,0,1])
+                    angleDegrees = int(np.degrees(angle))
+                    print(angleDegrees)
+                    rayIndex = int(len(self.rays.ranges) / 2) + int(angleDegrees - 90)
 
+                    boxDepth = self.depth_image[cy][cx]
+                    centreBoxDepth = boxDepth + 0.1 #adjacent
+                    xOffset = centreBoxDepth/10 + 0.2 #opposite
+                    c = np.sqrt(centreBoxDepth**2 + xOffset**2)
+                    
+                    angleRange = (np.arctan(xOffset/centreBoxDepth))
+                    indexRange = int(angleRange * (180 / np.pi))
+                    start_index = max(0, rayIndex - indexRange)
+                    end_index = min(360, rayIndex + indexRange + 1)
+                    for i in range(start_index, end_index):
+                        self.rays.intensities[i] = 100
+
+                    self.laser_pub.publish(self.rays)
+                    rayDepth = self.min_range(self.rays.ranges[start_index:end_index])
+                    xDistFromCentre = abs(self.cCentreX - cx) / self.cCentreX
+                    if(rayDepth < boxDepth):
+                        self.get_logger().warning("Wall is somehow in front of box!")
+                    if(rayDepth - boxDepth < 0.2 + xDistFromCentre/8): #xDistFromCentre to account for distortion
+                        self.get_logger().info(f'Box at {cx}, {cy} against wall')
+                        continue
+                    self.get_logger().info(f'Box at {cx}, {cy} to be pushed')
+                    
                     boxContours.append(contour)
+
                     area = cv2.contourArea(contour)
                     # Draw a circle centered at centroid coordinates
                     # cv2.circle(image, center_coordinates, radius, color, thickness) -1 px will fill the circle
@@ -126,25 +175,14 @@ class TidyBehaviour(Node):
                     elif cx > self.cCentreX + 10:
                         self.turn_dir = -1
                     else: 
-                        #By noting down the values of the contour's area and distance of the robot to the wall
-                        #when the box is next to the wall and plotting these points on Desmos I found the equation
-                        #y=1200*x^-2 fairly accurately describes the relationship between contour area and wall
-                        #distance to the robot. This means that I can calculate the expected area for the contours
-                        #if the cube were next to the wall. If the result is greater than expected, then the cube
-                        #must be away from the wall and therefore must be pushed. This fails when the robot is 
-                        #at increasingly acute angles to the wall however, but a failure means it will push the cube
-                        #when it doesn't have to, rather than not pushing a cube it must, meaning the task will still
-                        #be completed.
+                  
+                       
+                        self.changeState(State.PushingToWall if self.state == State.ReAlignToCube else State.CloseInOnCube)
 
-                        expectedArea = 1200 * (self.forward_dist** -2)
-                        if(area > expectedArea + 200): #Was triggering a little too much
-                            self.changeState(State.PushingToWall if self.state == State.ReAlignToCube else State.CloseInOnCube)
-                        else:
-                            self.changeState(State.TurningAround)
                         self.turn_dir = 0.0
                     
                     if(self.state == State.CloseInOnCube):
-                        if(area> 2500):
+                        if(area> 3000):
                             self.changeState(State.ReAlignToCube)
                     #dist = abs(xCentre - cx)
                     #self.align_turn_speed = dist/xCentre
@@ -153,17 +191,18 @@ class TidyBehaviour(Node):
             # turn until we can see a coloured object
         
         if len(boxContours) == 0:
-            if(self.state == State.FindingClosestCube):
+            if(self.state != State.PushingToWall):
                 self.changeState(State.TurningAround)
             return;
-            
+        elif (self.state == State.TurningAround):
+            self.changeState(State.AlignToCube)
         if(self.state == State.CloseInOnCube or self.state == State.Testing):
-            self.get_logger().info(f'Distance: {self.forward_dist} / Area: {cv2.contourArea(boxContours[0])}')
+            self.get_logger().info(f'Distance: {self.rays.ranges[180]} / Area: {cv2.contourArea(boxContours[0])}')
 
         current_frame_contours = cv2.drawContours(current_frame, boxContours, -1, (255, 255, 0), 20)   
         # show the cv images
-        current_frame_contours_small = cv2.resize(current_frame_contours, (0,0), fx=0.4, fy=0.4) # reduce image size
-        cv2.imshow("Image window", current_frame_contours_small)
+        current_frame_contours_small = cv2.resize(current_frame_contours, (0,0), fx=0.9, fy=0.9) # reduce image size
+        cv2.imshow("Colour", current_frame_contours_small)
         cv2.waitKey(1)
 
     def min_range(self, range):
@@ -187,7 +226,7 @@ class TidyBehaviour(Node):
         # first, identify the nearest obstacle in the right 45 degree segment of the laser scanner
         min_range_right = self.min_range(data.ranges[:self.scan_segment])
         min_range_left = self.min_range(data.ranges[-self.scan_segment:])
-        self.forward_dist = data.ranges[180]
+        self.rays = data
         #self.turn_dir = 0
        
             
@@ -195,18 +234,10 @@ class TidyBehaviour(Node):
     def timer_callback(self):
 
         twist = Twist()
-        if(self.state == State.TurningAround):     
-            if(self.startTurnYaw == 0):
-                self.changeState(State.TurningAround) 
 
-            yawDistance = abs(abs(self.startTurnYaw) - abs(self.robot_current_pose_real[2]))
-            self.get_logger().info(f'Starter: {self.startTurnYaw} - Now: {yawDistance}')
-            if(yawDistance > np.pi/random.randint(4,6)):
-                self.changeState(State.FindingClosestCube)
-                return
-            twist.angular.z = self.fast_turn_speed   
-            
-        elif(self.state == State.FindingClosestCube):
+        if(self.state == State.TurningAround):     
+            twist.angular.z = self.fast_turn_speed         
+        elif(self.state == State.AlignToCube):
             twist.angular.z = self.align_turn_speed * self.turn_dir   
         elif(self.state == State.CloseInOnCube):
             twist.linear.x = self.forward_speed;
@@ -214,7 +245,7 @@ class TidyBehaviour(Node):
             twist.angular.z = self.align_turn_speed * self.turn_dir   
         elif(self.state == State.PushingToWall):
             twist.linear.x = self.forward_speed;
-            if(self.forward_dist < 0.3):
+            if(self.rays.ranges[180] < 0.3):
                 self.changeState(State.BackingUp)
         elif(self.state == State.BackingUp):
             distance = np.sqrt((self.robot_current_pose_real[0]-self.startReversePosX)**2 
@@ -225,6 +256,7 @@ class TidyBehaviour(Node):
         elif(self.state == State.Testing):
             
             return
+        twist.linear.x += 0.01
         self.twist_pub.publish(twist)   
 #From https://github.com/LCAS/teaching/blob/2324-devel/cmp3103m_ros2_code_fragments/cmp3103m_ros2_code_fragments/robot_feedback_control_todo.py
     def euler_from_quaternion(self, quaternion):
@@ -260,7 +292,7 @@ class TidyBehaviour(Node):
         if(newState == State.TurningAround):
             self.startTurnYaw = self.robot_current_pose_real[2]
             return
-        elif(newState == State.FindingClosestCube):
+        elif(newState == State.AlignToCube):
             return
         elif(newState == State.CloseInOnCube):
             return
