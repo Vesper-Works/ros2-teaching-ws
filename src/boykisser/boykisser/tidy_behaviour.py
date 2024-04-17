@@ -28,9 +28,9 @@ class State(Enum):
 class TidyBehaviour(Node):
 
     min_distance = 0.5  # stay at least 30cm away from obstacles
-    fast_turn_speed = 0.9    # rad/s, turning speed in case of obstacle
+    fast_turn_speed = 0.6    # rad/s, turning speed in case of obstacle
     align_turn_speed = 0.3    # rad/s, turning speed in case of obstacle
-    forward_speed = 0.3 # m/s, speed with which to go forward if the space is clear
+    forward_speed = 0.2 # m/s, speed with which to go forward if the space is clear
     scan_segment = 1   # degrees, the size of the left and right laser segment to search for obstacles
     state = State.TurningAround
     turn_dir = 0
@@ -45,19 +45,21 @@ class TidyBehaviour(Node):
         super().__init__('tidybehaviour')
         self.laser_sub = self.create_subscription(
             LaserScan,"/scan",
-            self.callback, 1)
+            self.callback, 5)
         self.twist_pub = self.create_publisher(
             Twist,
-            '/cmd_vel', 1)
+            '/cmd_vel', 5)
         self.laser_pub = self.create_publisher(
-            LaserScan, "/scan", 1)
+            LaserScan, "/scan", 5)
         
-        self.timer = self.create_timer(0.02, self.timer_callback)
+        #self.timer = self.create_timer(0.05, self.timer_callback)
 
         # subscribe to the camera topic
-        self.create_subscription(Image, '/limo/depth_camera_link/depth/image_raw', self.depth_camera_callback, 10)
-        self.create_subscription(Image, '/limo/depth_camera_link/image_raw', self.camera_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, "/odom", self.set_pose, 20)
+        self.create_subscription(Image, '/camera/depth/image_raw', self.depth_camera_callback, 1)
+        self.create_subscription(Image, '/camera/color/image_raw', self.camera_callback, 1)
+        #self.create_subscription(Image, '/limo/depth_camera_link/depth/image_raw', self.depth_camera_callback, 10)
+        #self.create_subscription(Image, '/limo/depth_camera_link/image_raw', self.camera_callback, 10)
+        self.odom_sub = self.create_subscription(Odometry, "/odom", self.set_pose, 2)
         # Used to convert between ROS and OpenCV images
         self.br = CvBridge()
     def yCameraValueSorter(self, contour):
@@ -70,21 +72,58 @@ class TidyBehaviour(Node):
         
         dist = abs(self.cCentreX - x)
 
-        boxDepth = -self.depth_image[y][x]
+        boxDepth = -self.depth_image[min(y, 399)][x]
 
         return boxDepth - (dist/(self.cCentreX/2)) #dist used to settle ties, favour centred boxes
 #Modified from https://github.com/LCAS/teaching/blob/2324-devel/cmp3103m_ros2_code_fragments/cmp3103m_ros2_code_fragments/colour_chaser2.py
+    
+    def get_lidar_centre(self):
+        guys = []
+        
+        for guy in self.rays.ranges:
+            if(guy != 0):
+                guys.append(guy)
+        if(len(guy)%2 != 0):
+            guy.remove(len(guy)-1)
+        return guys[len(guy)/2]
     def depth_camera_callback(self, data):
         cv2.namedWindow("Depth", 1)
 
         # Convert ROS Image message to OpenCV image
-        current_frame = self.br.imgmsg_to_cv2(data, "32FC1")
+        current_frame = self.br.imgmsg_to_cv2(data, "16UC1")
+        #current_frame = self.br.imgmsg_to_cv2(data, "32FC1")
+        
         self.depth_image = current_frame
         depth_image_small = cv2.resize(current_frame, (0,0), fx=0.9, fy=0.9)
         cv2.imshow("Depth", depth_image_small)
         cv2.waitKey(1)
         return
     def camera_callback(self, data):
+
+        twist = Twist()
+
+        if(self.state == State.TurningAround):     
+            twist.angular.z = self.fast_turn_speed         
+        elif(self.state == State.AlignToCube):
+            twist.angular.z = self.align_turn_speed * self.turn_dir   
+        elif(self.state == State.CloseInOnCube):
+            twist.linear.x = self.forward_speed;
+        elif(self.state == State.ReAlignToCube):
+            twist.angular.z = self.align_turn_speed * self.turn_dir   
+        elif(self.state == State.PushingToWall):
+            twist.linear.x = self.forward_speed;
+            if(self.rays.ranges[180] < 0.4):
+                self.changeState(State.BackingUp)
+        elif(self.state == State.BackingUp):
+            distance = np.sqrt((self.robot_current_pose_real[0]-self.startReversePosX)**2 
+                          + (self.robot_current_pose_real[1]-self.startReversePosY)**2)
+            if(distance > 1.0):
+                self.changeState(State.TurningAround)
+            twist.linear.x = -self.forward_speed; 
+        elif(self.state == State.Testing):           
+            return
+        twist.linear.x += 0.01
+        self.twist_pub.publish(twist)   
 
         if (self.state != State.TurningAround and 
             self.state != State.AlignToCube and 
@@ -94,7 +133,6 @@ class TidyBehaviour(Node):
             return;
         if(self.rays == None or len(self.depth_image) == 0):
             return;
-        cv2.namedWindow("Colour", 1)
 
         # Convert ROS Image message to OpenCV image
         current_frame = self.br.imgmsg_to_cv2(data, desired_encoding='bgr8')
@@ -102,7 +140,7 @@ class TidyBehaviour(Node):
         current_frame_hsv = cv2.cvtColor(current_frame, cv2.COLOR_BGR2HSV)
         # Create mask for range of colours (HSV low values, HSV high values)
         #current_frame_mask = cv2.inRange(current_frame_hsv,(70, 0, 50), (150, 255, 255))
-        current_frame_mask = cv2.inRange(current_frame_hsv,(0, 150, 50), (255, 255, 255)) # orange
+        current_frame_mask = cv2.inRange(current_frame_hsv,(30, 25, 25), (80, 255, 255))
 
         contours, hierarchy = cv2.findContours(current_frame_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         #print(contours)
@@ -124,8 +162,8 @@ class TidyBehaviour(Node):
                     cy = int(M['m01']/M['m00'])
                     self.cCentreY = data.height/2
                     self.cCentreX = data.width/2
-
-                    if cy <= self.cCentreY:
+                    area = cv2.contourArea(contour)
+                    if cy <= self.cCentreY or area < 100:
                         continue
                         
                     projectionMat = np.matrix([[448.6252424876914, 0, 320.5], [0, 448.6252424876914, 240.5],[0, 0, 1]])
@@ -137,32 +175,40 @@ class TidyBehaviour(Node):
                     angleDegrees = int(np.degrees(angle))
                     print(angleDegrees)
                     rayIndex = int(len(self.rays.ranges) / 2) + int(angleDegrees - 90)
+                    print(self.rays.ranges[rayIndex])
 
-                    boxDepth = self.depth_image[cy][cx]
-                    centreBoxDepth = boxDepth + 0.1 #adjacent
-                    xOffset = centreBoxDepth/10 + 0.2 #opposite
-                    c = np.sqrt(centreBoxDepth**2 + xOffset**2)
+
+
+                    #boxDepth = self.depth_image[min(cy,399)][cx]
+                    #centreBoxDepth = boxDepth + 0.1 #adjacent
+                    #xOffset = centreBoxDepth/10 + 0.2 #opposite
+                    #c = np.sqrt(centreBoxDepth**2 + xOffset**2)
                     
-                    angleRange = (np.arctan(xOffset/centreBoxDepth))
-                    indexRange = int(angleRange * (180 / np.pi))
-                    start_index = max(0, rayIndex - indexRange)
-                    end_index = min(360, rayIndex + indexRange + 1)
-                    for i in range(start_index, end_index):
-                        self.rays.intensities[i] = 100
+                    #angleRange = (np.arctan(xOffset/centreBoxDepth))
+                    #indexRange = int(angleRange * (180 / np.pi))
+                    #start_index = max(0, rayIndex - indexRange)
+                    #end_index = min(360, rayIndex + indexRange + 1)
+                    #for i in range(start_index, end_index):
+                    #    self.rays.intensities[i] = 100
 
-                    self.laser_pub.publish(self.rays)
-                    rayDepth = self.min_range(self.rays.ranges[start_index:end_index])
-                    xDistFromCentre = abs(self.cCentreX - cx) / self.cCentreX
-                    if(rayDepth < boxDepth):
-                        self.get_logger().warning("Wall is somehow in front of box!")
-                    if(rayDepth - boxDepth < 0.2 + xDistFromCentre/8): #xDistFromCentre to account for distortion
-                        self.get_logger().info(f'Box at {cx}, {cy} against wall')
+                    #self.laser_pub.publish(self.rays)
+                    #rayDepth = self.min_range(self.rays.ranges[start_index:end_index])
+                    #xDistFromCentre = abs(self.cCentreX - cx) / self.cCentreX
+                    
+                    
+                    expectedArea = 1200 * (self.rays.ranges[rayIndex]** -2)
+                    if(area < expectedArea + 200):
                         continue
-                    self.get_logger().info(f'Box at {cx}, {cy} to be pushed')
+                    
+                    #if(rayDepth < boxDepth):
+                    #    self.get_logger().warning("Wall is somehow in front of box!")
+                    #if(rayDepth - boxDepth < 0.2 + xDistFromCentre/8): #xDistFromCentre to account for distortion
+                    #    self.get_logger().info(f'Box at {cx}, {cy} against wall')
+                    #    continue
+                    #self.get_logger().info(f'Box at {cx}, {cy} to be pushed')
                     
                     boxContours.append(contour)
 
-                    area = cv2.contourArea(contour)
                     # Draw a circle centered at centroid coordinates
                     # cv2.circle(image, center_coordinates, radius, color, thickness) -1 px will fill the circle
                     cv2.circle(current_frame, (round(cx), round(cy)), 5, (0, 255, 0), -1)
