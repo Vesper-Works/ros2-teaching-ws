@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'boykisser'
+package_name = 'tidy_behaviour'
 
 setup(
     name=package_name,
@@ -14,17 +14,13 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='lcas',
-    maintainer_email='student@socstech.support',
+    maintainer_email='25730188@students.lincoln.ac.uk',
     description='TODO: Package description',
-    license='Apache-2.0',
+    license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-                'roamer = boykisser.roamer:main',
-                'opencv = boykisser.opencv_bridge:main',
-                'countour = boykisser.colour_contours:main',
-                'square = boykisser.square:main',
-                'controlstrat = boykisser.ControlStrategy:main'
+            'tidy = TidyAssignment.tidy_behaviour:main'
         ],
     },
 )
